@@ -5,6 +5,11 @@ Are you one of the few people who play ZZZ on a Mac? Do you wish you could run m
 ZZMMI is a ZZZ mod loader specifically designed for Mac. It's compatible with [XXMI](https://github.com/SpectrumQT/XXMI-Launcher),
 so any mods made for that or for ZZMI should work without a hitch.
 
+<img width="1710" height="1107" alt="Piper using a Roxy outfit skin" src="https://github.com/ImNotJahan/ZZMMI/blob/main/screenshot.png" />
+<p align="center"><i>Picture of the <a href="https://gamebanana.com/mods/715613">Piper in Roxy's Outfit</a> mod running on my M3 Mac Air</i></p>
+
+<br>
+
 It runs ZZZ through [Yaagl](https://github.com/yaagl/yet-another-anime-game-launcher)
 (Wine + [DXMT](https://github.com/3Shain/dxmt), D3D11->Metal ZZZ runs on macOS through ). 
 ZZMMI runs XXMI's real 3DMigoto build inside that Wine runtime, on top of DXMT, and manages it from a native macOS CLI.
