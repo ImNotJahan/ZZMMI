@@ -1,0 +1,10 @@
+__pycache__/
+*.egg-info/
+.venv/
+.pytest_cache/
+runs/
+build/
+dist/
+.DS_Store
+
+docs/PHASE0.md

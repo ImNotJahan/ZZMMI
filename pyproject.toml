@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zzmmi"
+version = "0.1.0"
+description = "Mac-first, XXMI-compatible mod loader for Zenless Zone Zero"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+zzmmi = "zzmmi.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["zzmmi*"]
