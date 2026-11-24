@@ -30,7 +30,10 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 .venv/bin/zzmmi doctor            # check the environment
 .venv/bin/zzmmi debug-launch      # launch with mods and full logging
 .venv/bin/zzmmi restore           # undo Wine DLL swaps and proxy links after an interrupted session
+.venv/bin/zzmmi gui               # launcher window: Launch button, Mods folder shortcut, live log
 ```
+
+The GUI uses tkinter. Homebrew's Python ships it separately: `brew install python-tk@3.14` (match your Python version).
 
 Put mods where you would usually for XXMI (that is, put them in `XXMI Launcher\ZZMI\Mods`)
 

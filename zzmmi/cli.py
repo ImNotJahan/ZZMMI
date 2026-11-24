@@ -89,10 +89,15 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("restore", help="put Wine's own d3d11/dxgi back after an interrupted session")
 
+    sub.add_parser("gui", help="open the launcher window")
+
     args = parser.parse_args(argv)
     try:
         if args.command == "doctor":
             return doctor.main()
+        if args.command == "gui":
+            from . import gui  # imported lazily: tkinter may not be installed
+            return gui.main()
         if args.command == "debug-launch":
             opts = _debug_options(args)
             runtime = (CrossOverRuntime.discover(bottle=args.bottle) if args.runtime == "crossover"
