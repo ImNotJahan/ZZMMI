@@ -35,6 +35,19 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
 
 The GUI uses tkinter. Homebrew's Python ships it separately: `brew install python-tk@3.14` (match your Python version).
 
+### App
+
+Download `ZZMMI.zip` from the [latest release](https://github.com/ImNotJahan/ZZMMI/releases/latest), unzip it and move
+`ZZMMI.app` to Applications. It isn't notarized, so the first time you open it, right-click it and choose Open (or allow it
+under System Settings → Privacy & Security). Run logs go to `~/Library/Application Support/ZZMMI/runs`.
+
+To build it yourself (requires a Python with tkinter, e.g. from python.org):
+
+```sh
+python3 -m pip install . py2app
+macos/build.sh                    # -> macos/dist/ZZMMI.app and ZZMMI.zip
+```
+
 Put mods where you would usually for XXMI (that is, put them in `XXMI Launcher\ZZMI\Mods`)
 
 ## Disclaimer

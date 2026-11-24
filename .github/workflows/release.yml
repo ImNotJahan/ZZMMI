@@ -1,0 +1,91 @@
+name: Build and release ZZMMI.app
+
+on:
+  schedule:
+    # 11:00 UTC = 6:00 AM EST (7:00 AM during daylight saving time; cron is always UTC).
+    - cron: "0 11 * * *"
+  workflow_dispatch: # manual runs always build
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.commits.outputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: commits
+        name: Look for commits made yesterday (US Eastern)
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual run: building regardless of commit activity."
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          since=$(TZ=America/New_York date -d "yesterday 00:00" --iso-8601=seconds)
+          until=$(TZ=America/New_York date -d "today 00:00" --iso-8601=seconds)
+          count=$(git log --since="$since" --until="$until" --format=%H | wc -l)
+          echo "$count commit(s) between $since and $until"
+          if [ "$count" -gt 0 ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    runs-on: macos-14 # Apple Silicon
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[dev]" py2app
+
+      - name: Test
+        run: python -m pytest -q
+
+      - name: Build app
+        run: PYTHON=python macos/build.sh
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          day=$(TZ=America/New_York date +%Y-%m-%d)
+          tag="build-$(TZ=America/New_York date +%Y%m%d)-$(git rev-parse --short HEAD)"
+          prev=$(git tag --list "build-*" --sort=-creatordate | head -n 1)
+          {
+            echo "Automated build of \`$(git rev-parse --short HEAD)\`."
+            echo
+            echo "Download **ZZMMI.zip**, unzip it and move ZZMMI.app to Applications."
+            echo "The app is not notarized: on first launch, right-click it and choose Open"
+            echo "(or allow it in System Settings → Privacy & Security)."
+            echo
+            echo "## Changes"
+            if [ -n "$prev" ]; then
+              git log "$prev..HEAD" --format="- %s (%h)"
+            else
+              git log --format="- %s (%h)"
+            fi
+          } > notes.md
+          gh release create "$tag" macos/dist/ZZMMI.zip \
+            --target "$GITHUB_SHA" \
+            --title "ZZMMI $day" \
+            --notes-file notes.md

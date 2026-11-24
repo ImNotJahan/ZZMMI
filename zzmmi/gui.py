@@ -22,7 +22,20 @@ except ImportError as e:  # Homebrew's Python ships Tk separately
 from .runtime.xxmi_legacy import XxmiInPrefix
 from .runtime.yaagl import YaaglError, YaaglRuntime
 
-LAUNCH_COMMAND = [sys.executable, "-m", "zzmmi", "debug-launch"]
+APP_RUNS = Path.home() / "Library" / "Application Support" / "ZZMMI" / "runs"
+
+
+def launch_command() -> list[str]:
+    if getattr(sys, "frozen", False):
+        # Inside the py2app bundle there is no usable `python -m`; the app's own executable
+        # runs the CLI when given arguments (see macos/ZZMMI.py). Its working directory is
+        # inside the bundle, so keep run logs in Application Support instead.
+        exe = Path(os.environ["RESOURCEPATH"]).parent / "MacOS" / "ZZMMI"
+        return [str(exe), "debug-launch", "--runs-dir", str(APP_RUNS)]
+    return [sys.executable, "-m", "zzmmi", "debug-launch"]
+
+
+LAUNCH_COMMAND = launch_command()
 POLL_MS = 100
 
 
