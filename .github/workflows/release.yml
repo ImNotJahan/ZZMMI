@@ -61,6 +61,13 @@ jobs:
       - name: Test
         run: python -m pytest -q
 
+      # Picked before building: macos/setup.py stamps ZZMMI_BUILD_TAG into Info.plist, and the
+      # app's "Check for updates" compares it with the latest release's tag.
+      - name: Pick release tag
+        run: |
+          echo "ZZMMI_BUILD_DAY=$(TZ=America/New_York date +%Y-%m-%d)" >> "$GITHUB_ENV"
+          echo "ZZMMI_BUILD_TAG=build-$(TZ=America/New_York date +%Y%m%d)-$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+
       - name: Build app
         run: PYTHON=python macos/build.sh
 
@@ -68,8 +75,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          day=$(TZ=America/New_York date +%Y-%m-%d)
-          tag="build-$(TZ=America/New_York date +%Y%m%d)-$(git rev-parse --short HEAD)"
+          day="$ZZMMI_BUILD_DAY"
+          tag="$ZZMMI_BUILD_TAG"
           prev=$(git tag --list "build-*" --sort=-creatordate | head -n 1)
           {
             echo "Automated build of \`$(git rev-parse --short HEAD)\`."
