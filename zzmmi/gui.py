@@ -43,11 +43,11 @@ ICON_PATH = RESOURCES / "icon.png"
 TILE_IMAGES = RESOURCES / "tiles"
 TILE_PX = 128
 TILE_PAD = 12
-# Shown while the game starts. Made from art/loading.webp by art/make_loading_gif.py: colors inverted, each frame
-# flattened onto black (Tk's GIF transparency is all-or-nothing, which would fringe the edges).
-LOADING_GIF = RESOURCES / "loading.gif"
+# Shown while the game starts. Made from art/loading.webp by art/make_loading_gif.py, with a transparent
+# background: white art for dark mode, black art for light mode.
+LOADING_GIF_DARK = RESOURCES / "loading_dark.gif"
+LOADING_GIF_LIGHT = RESOURCES / "loading_light.gif"
 LOADING_FRAME_MS = 20  # the GIF's frame delay (Tk doesn't expose it)
-LOADING_BG = "black"
 GAME_WINDOW_POLL_SECONDS = 0.5
 
 DEFAULT_SIZE = "720x580"
@@ -560,26 +560,33 @@ def load_gif_frames(path: Path) -> list[tk.PhotoImage]:
             return frames
 
 
+def dark_mode(widget: tk.Misc) -> bool:
+    try:
+        return bool(int(widget.tk.call("tk::unsupported::MacWindowStyle", "isdark", widget)))
+    except tk.TclError:  # not Aqua, or Tk older than 8.6.10
+        return False
+
+
 class LoadingWindow(tk.Toplevel):
-    """A borderless "Now Loading" splash that floats over everything while the game starts.
+    """A "Now Loading" window that stays above other windows while the game starts.
 
     It closes itself once the game's window is on screen, which a background thread watches
-    for. close() also closes it (the game exited first); so does clicking it.
+    for. close() also closes it (the game exited first); so does its close button.
     """
 
-    def __init__(self, master: tk.Misc) -> None:
-        super().__init__(master, bg=LOADING_BG)
-        self.overrideredirect(True)
-        # On macOS a borderless window ignores -topmost until it's on screen.
-        self.bind("<Map>", lambda e: e.widget is self and self.attributes("-topmost", True))
-        self.frames = load_gif_frames(LOADING_GIF)
+    def __init__(self, master: tk.Misc, colors: Colors) -> None:
+        super().__init__(master, bg=colors.bg)
+        self.title("Now Loading")
+        self.resizable(False, False)
+        self.attributes("-topmost", True)
+        self.protocol("WM_DELETE_WINDOW", self.close)
+        self.frames = load_gif_frames(LOADING_GIF_DARK if dark_mode(master) else LOADING_GIF_LIGHT)
         self.frame = 0
         self.label = tk.Label(
-            self, bg=LOADING_BG, fg="white", bd=0, cursor="pointinghand",
+            self, bg=colors.bg, fg=colors.text, bd=0,
             **({"image": self.frames[0]} if self.frames else {"text": "Now loading…", "font": ("Helvetica", 28, "bold")}),
         )
         self.label.pack(padx=28, pady=28)
-        self.label.bind("<ButtonRelease-1>", lambda _e: self.close())
 
         self.update_idletasks()
         x = master.winfo_rootx() + (master.winfo_width() - self.winfo_reqwidth()) // 2
@@ -711,7 +718,7 @@ class App:
             game_tile.set_enabled(True)
 
         self._close_loading()
-        self.loading = LoadingWindow(self.root)
+        self.loading = LoadingWindow(self.root, self.colors)
 
     def _close_loading(self) -> None:
         if self.loading is not None:
