@@ -30,6 +30,7 @@ except ImportError as e:  # Homebrew's Python ships Tk separately
 
 from . import updates
 from .characters import character_tags
+from .conflicts import find_conflicts, mod_overrides
 from .game_window import game_window_visible
 from .runtime.xxmi_legacy import XxmiInPrefix
 from .runtime.yaagl import YaaglError, YaaglRuntime
@@ -64,6 +65,7 @@ TK9 = tk.TkVersion >= 9  # Tk 9 changed how scroll events arrive (see ModlistWin
 ALL_CHARACTERS_LABEL = "All characters"
 NO_CHARACTER = ""
 NO_CHARACTER_LABEL = "Other"
+CONFLICTS_LISTED = 5  # in the conflict warning, beyond the first pair
 
 
 def launch_command(*extra: str) -> list[str]:
@@ -361,7 +363,8 @@ class ModlistWindow(tk.Toplevel):
     Ticking a box only records the choice. "Save list" applies the choices, moving mods between
     the Mods and ModsNotUsing folders, then reloads mods in the game if it's running. The list
     re-reads the folders whenever the window gets focus, keeping any unsaved choices. A search
-    box and a character menu above the list filter it.
+    box and a character menu above the list filter it. If saving would enable two mods that
+    override the same thing, it asks first.
     """
 
     def __init__(self, master: tk.Misc, colors: Colors) -> None:
@@ -499,8 +502,40 @@ class ModlistWindow(tk.Toplevel):
                 if m.path in self.checks and self.checks[m.path].get() != m.enabled}
 
     def save(self) -> None:
-        """Move the mods whose boxes changed, then reload mods in the running game."""
+        """Save the choices, after asking if they'd enable mods that conflict (see conflicts.py)."""
         if self.saving or self.library is None:
+            return
+        conflicts = self._new_conflicts()
+        if not conflicts:
+            self._apply()
+            return
+        (first, second), others = conflicts[0], conflicts[1:]
+        detail = ""
+        if others:
+            shown = [f"{a} and {b}" for a, b in others[:CONFLICTS_LISTED]]
+            if len(others) > CONFLICTS_LISTED:
+                shown.append(f"…and {len(others) - CONFLICTS_LISTED} more")
+            detail = "Also in conflict:\n" + "\n".join(shown)
+        popup = Popup(
+            self, self.colors, "conflict.png",
+            f"It appears {first} and {second} are in conflict. Are you sure you want to enable both?",
+            detail, buttons=(("No", None), ("Yes", self._apply)),
+        )
+        popup.grab_set()  # no ticking boxes behind it: Yes saves exactly what was checked
+
+    def _new_conflicts(self) -> list[tuple[str, str]]:
+        """Pairs of mods that would conflict once saved, where saving enables at least one of them.
+
+        Conflicts between mods that are already enabled were warned about when they were enabled.
+        """
+        pending = self.pending()
+        enabled = [m for m in self.mods if pending.get(m.name, m.enabled)]
+        overrides = {m.name: mod_overrides(m.path) for m in enabled}  # ~1 ms per mod; not cached
+        return [(a, b) for a, b in find_conflicts(overrides) if pending.get(a) or pending.get(b)]
+
+    def _apply(self) -> None:
+        """Move the mods whose boxes changed, then reload mods in the running game."""
+        if self.saving or self.library is None or not self.winfo_exists():
             return
         errors = []
         for name, enabled in self.pending().items():
