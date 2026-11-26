@@ -57,6 +57,7 @@ FROZEN = getattr(sys, "frozen", False)
 # keeps them in Application Support; from source they go to ./runs like the CLI's default.
 RUNS_DIR = (Path.home() / "Library" / "Application Support" / "ZZMMI" / "runs") if FROZEN else Path.cwd() / "runs"
 POLL_MS = 100
+TK9 = tk.TkVersion >= 9  # Tk 9 changed how scroll events arrive (see ModlistWindow._on_wheel)
 
 
 def launch_command(*extra: str) -> list[str]:
@@ -390,6 +391,8 @@ class ModlistWindow(tk.Toplevel):
         self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(rows_id, width=e.width))
         # The Toplevel is in every child's bindtags, so these catch events anywhere in the window.
         self.bind("<MouseWheel>", self._on_wheel)
+        if TK9:  # Tk 9 reports trackpad and Magic Mouse scrolling as its own event
+            self.bind("<TouchpadScroll>", self._on_touchpad)
         # FocusIn also fires when focus moves between widgets in the window; refresh() only
         # rebuilds the rows when the folders changed, so those extra calls cost one directory read.
         self.bind("<FocusIn>", lambda _e: self.after_idle(self.refresh))
@@ -523,12 +526,30 @@ class ModlistWindow(tk.Toplevel):
         self._filter()
         self.canvas.yview_moveto(0)  # the old scroll position means nothing for the new results
 
+    def _scrollable(self) -> bool:
+        return self.rows.winfo_height() > self.canvas.winfo_height()  # if everything fits, don't drift
+
+    def _scroll_pixels(self, pixels: float) -> None:
+        """Scroll the list down by `pixels` (up if negative)."""
+        top = self.canvas.yview()[0]
+        self.canvas.yview_moveto(top + pixels / self.rows.winfo_height())
+
     def _on_wheel(self, event: tk.Event) -> None:
-        if self.rows.winfo_height() <= self.canvas.winfo_height():
-            return  # everything fits; don't let the list drift
-        # Aqua Tk 8.6 reports small per-notch deltas; other platforms and Tk 9 use multiples of 120.
-        step = event.delta if abs(event.delta) < 120 else event.delta // 120
-        self.canvas.yview_scroll(-step, "units")
+        if not self._scrollable():
+            return
+        if TK9:
+            # Delta is in 120ths of a notch and can be any size; scroll like Tk 9's text widget.
+            self._scroll_pixels(-event.delta / 4)
+        else:
+            # Aqua Tk 8.6 reports whole lines per event, trackpad scrolling included.
+            self.canvas.yview_scroll(-event.delta, "units")
+
+    def _on_touchpad(self, event: tk.Event) -> None:
+        if not self._scrollable():
+            return
+        # %D packs the horizontal and vertical pixel deltas into one number.
+        _dx, dy = (int(v) for v in self.tk.splitlist(self.tk.call("tk::PreciseScrollDeltas", event.delta)))
+        self._scroll_pixels(-dy)
 
 
 class Popup(tk.Toplevel):
