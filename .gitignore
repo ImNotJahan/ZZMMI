@@ -4,8 +4,10 @@ __pycache__/
 .pytest_cache/
 runs/
 build/
+zzmmi/resources/bin/
 dist/
 .DS_Store
 
 docs/PHASE0.md
+docs/
 art

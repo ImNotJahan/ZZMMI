@@ -3,7 +3,10 @@ CC = x86_64-w64-mingw32-gcc
 CFLAGS = -O2 -Wall -Wextra -municode -static
 OUT = build
 
-all: $(OUT)/zzmmi-bridge.exe $(OUT)/probes/noop/zzmmi_noop.dll \
+# Shipped with the app (package data), so it is built into the package, not build/.
+KEYS_EXE = ../zzmmi/resources/bin/zzmmi-keys.exe
+
+all: $(KEYS_EXE) $(OUT)/zzmmi-bridge.exe $(OUT)/probes/noop/zzmmi_noop.dll \
 	$(OUT)/probes/noop-skip-crash/zzmmi_noop_skip_crash.dll \
 	$(OUT)/probes/noop-patch-crash/zzmmi_noop_patch_crash.dll \
 	$(OUT)/probes/noop-hide-module/zzmmi_noop_hide_module.dll \
@@ -33,7 +36,13 @@ $(OUT)/probes/passthru/d3d11.dll: probes/passthru_d3d11.c
 	@mkdir -p $(dir $@)
 	$(CC) -O2 -Wall -shared -static -o $@ $< -luser32
 
-clean:
-	rm -rf $(OUT)
+keys: $(KEYS_EXE)
 
-.PHONY: all clean
+$(KEYS_EXE): zzmmi_keys.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -s -o $@ $<
+
+clean:
+	rm -rf $(OUT) $(KEYS_EXE)
+
+.PHONY: all keys clean

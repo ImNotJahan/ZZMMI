@@ -21,4 +21,4 @@ zzmmi-gui = "zzmmi.gui:main"
 include = ["zzmmi*"]
 
 [tool.setuptools.package-data]
-zzmmi = ["resources/*.png", "resources/*.gif", "resources/tiles/*.png"]
+zzmmi = ["resources/*.png", "resources/*.gif", "resources/tiles/*.png", "resources/bin/*.exe"]

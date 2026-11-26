@@ -102,6 +102,10 @@ def patch_d3dx(path: Path, opts: DebugOptions, loader_exe: str | None = None) ->
     doc.set("Logging", "show_warnings", 1)
     doc.set("Logging", "crash", 1 if opts.crash_handler else 0)
     doc.set("Hunting", "hunting", 1 if opts.hunting else 0)
+    # zzmmi.mods.reload_mods presses F10 while ZZMMI, not the game, is frontmost. Wine's macOS
+    # driver then makes the desktop the foreground window, and with this check on 3DMigoto drops
+    # the key. Wine only sees keys typed into its own windows anyway.
+    doc.set("System", "check_foreground_window", 0)
     if not opts.core:
         doc.disable("Include", "include", r"Core\ZZMI\main.ini")
     if opts.mods is not None:

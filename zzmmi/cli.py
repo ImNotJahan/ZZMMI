@@ -49,6 +49,33 @@ def _debug_options(args: argparse.Namespace) -> DebugOptions:
     return opts
 
 
+def _mods(args: argparse.Namespace) -> int:
+    from . import mods
+
+    library = mods.ModLibrary.discover()
+    if args.action in ("enable", "disable"):
+        if not args.names:
+            raise YaaglError(f"mods {args.action} needs at least one mod name")
+        for name in args.names:
+            mod = library.set_enabled(name, args.action == "enable")
+            print(f"{args.action}d: {mod.name}")
+    elif args.action == "toggle":
+        if mods.toggle_all_mods():
+            print("Toggled all mods in the running game (F6).")
+        else:
+            print("The game isn't running.")
+        return 0
+    elif args.action == "list":
+        for mod in library.mods():
+            print(f"[{'x' if mod.enabled else ' '}] {mod.name}")
+        return 0
+    if mods.reload_mods():
+        print("Reloaded mods in the running game (F10).")
+    else:
+        print("The game isn't running; changes apply on the next launch.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="zzmmi", description="Mac-first XXMI-compatible mod loader for ZZZ")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -91,6 +118,10 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("gui", help="open the launcher window")
 
+    mods = sub.add_parser("mods", help="list, enable or disable mods (reloads them if the game is running); toggle: turn all mods on/off in game (F6)")
+    mods.add_argument("action", nargs="?", choices=["list", "enable", "disable", "reload", "toggle"], default="list")
+    mods.add_argument("names", nargs="*", metavar="MOD")
+
     args = parser.parse_args(argv)
     try:
         if args.command == "doctor":
@@ -104,6 +135,8 @@ def main(argv: list[str] | None = None) -> int:
                        else YaaglRuntime.discover())
             debug_launch.run(opts, args.runs_dir, runtime)
             return 0
+        if args.command == "mods":
+            return _mods(args)
         if args.command == "summarize":
             text = debug_launch.summarize(args.run_dir)
             (args.run_dir / "summary.txt").write_text(text)

@@ -31,6 +31,8 @@ from . import updates
 from .game_window import game_window_visible
 from .runtime.xxmi_legacy import XxmiInPrefix
 from .runtime.yaagl import YaaglError, YaaglRuntime
+from .mods import toggle_all_mods, ModLibrary, Mod
+from .mods import reload_mods as xxmi_reload_mods
 
 RESOURCES = Path(__file__).resolve().parent / "resources"
 ICON_PATH = RESOURCES / "icon.png"
@@ -47,6 +49,8 @@ LOADING_GIF = RESOURCES / "loading.gif"
 LOADING_FRAME_MS = 20  # the GIF's frame delay (Tk doesn't expose it)
 LOADING_BG = "black"
 GAME_WINDOW_POLL_SECONDS = 0.5
+
+DEFAULT_SIZE = "720x580"
 
 FROZEN = getattr(sys, "frozen", False)
 # Where each launch's logs go. The app bundle's working directory is inside the bundle, so it
@@ -344,6 +348,144 @@ class LogWindow(tk.Toplevel):
             self.log.unsubscribe(self.append)
 
 
+class ModlistWindow(tk.Toplevel):
+    """Lists the installed mods with a checkbox each for enabling/disabling them.
+
+    Ticking a box only records the choice. "Save list" applies the choices, moving mods between
+    the Mods and ModsNotUsing folders, then reloads mods in the game if it's running. The list
+    re-reads the folders whenever the window gets focus, keeping any unsaved choices.
+    """
+
+    def __init__(self, master: tk.Misc, colors: Colors) -> None:
+        super().__init__(master, bg=colors.bg)
+        self.colors = colors
+        self.title("ZZMMI Modlist")
+        self.geometry("500x800")
+        self.minsize(300, 200)
+
+        bar = tk.Frame(self, bg=colors.bg)
+        bar.pack(side=tk.TOP, fill=tk.X, padx=8, pady=(8, 0))
+        self.save_button = tk.Button(bar, text="Save list", highlightbackground=colors.bg, command=self.save)
+        self.save_button.pack(side=tk.LEFT)
+
+        # A frame of rows inside a canvas, so the list scrolls.
+        self.canvas = tk.Canvas(self, bg=colors.bg, highlightthickness=0)
+        scrollbar = tk.Scrollbar(self, orient=tk.VERTICAL, command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(8, 0), pady=8)
+        self.rows = tk.Frame(self.canvas, bg=colors.bg)
+        rows_id = self.canvas.create_window(0, 0, window=self.rows, anchor=tk.NW)
+        self.rows.bind("<Configure>", lambda _e: self.canvas.configure(scrollregion=self.canvas.bbox(tk.ALL)))
+        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(rows_id, width=e.width))
+        # The Toplevel is in every child's bindtags, so these catch events anywhere in the window.
+        self.bind("<MouseWheel>", self._on_wheel)
+        # FocusIn also fires when focus moves between widgets in the window; refresh() only
+        # rebuilds the rows when the folders changed, so those extra calls cost one directory read.
+        self.bind("<FocusIn>", lambda _e: self.after_idle(self.refresh))
+
+        self.library: ModLibrary | None = None
+        self.error: str | None = None  # why the library couldn't be read, if it couldn't
+        self.mods: list[Mod] = []  # on-disk state the rows were built from
+        self.checks: dict[Path, tk.BooleanVar] = {}  # by Mod.path
+        self.saving = False
+        self.refresh(force=True)
+
+    def refresh(self, force: bool = False, keep_pending: bool = True) -> None:
+        """Re-read the mod folders and rebuild the rows if anything changed.
+
+        Unsaved choices survive the rebuild unless `keep_pending` is False.
+        """
+        if self.saving or not self.winfo_exists():
+            return
+        try:
+            if self.library is None:
+                self.library = ModLibrary.discover()
+            mods, error = self.library.mods(), None
+        except (YaaglError, OSError) as e:
+            mods, error = [], f"Couldn't find the mods:\n\n{e}"
+        if not force and mods == self.mods and error == self.error:
+            return
+        pending = self.pending() if keep_pending else {}
+        self.mods, self.error = mods, error
+        self.checks = {}
+        for child in self.rows.winfo_children():
+            child.destroy()
+        if error is not None:
+            self._message(error)
+        elif not mods:
+            assert self.library is not None
+            self._message(f"No mods installed yet.\n\nPut them in {self.library.enabled_dir}")
+        for mod in mods:
+            self._add_row(mod, pending.get(mod.name, mod.enabled))
+
+    def pending(self) -> dict[str, bool]:
+        """Choices that differ from what's on disk, as {mod name: enabled}."""
+        return {m.name: self.checks[m.path].get() for m in self.mods
+                if m.path in self.checks and self.checks[m.path].get() != m.enabled}
+
+    def save(self) -> None:
+        """Move the mods whose boxes changed, then reload mods in the running game."""
+        if self.saving or self.library is None:
+            return
+        errors = []
+        for name, enabled in self.pending().items():
+            try:
+                self.library.set_enabled(name, enabled)
+            except (YaaglError, OSError) as e:
+                errors.append(f"Couldn't {'enable' if enabled else 'disable'} {name}: {e}")
+        self.refresh(force=True, keep_pending=False)  # failed moves show what's actually on disk
+        if errors:
+            messagebox.showerror("ZZMMI", "\n\n".join(errors), parent=self)
+
+        # Pressing the reload key takes about half a second, so it runs on a worker thread and
+        # Tk polls for the result.
+        result: dict[str, str] = {}
+
+        def reload() -> None:
+            try:
+                xxmi_reload_mods()
+            except (YaaglError, OSError, subprocess.SubprocessError) as e:
+                result["error"] = str(e)
+
+        def poll() -> None:
+            if worker.is_alive():
+                self.after(POLL_MS, poll)
+                return
+            self.saving = False
+            self.save_button.configure(state=tk.NORMAL, text="Save list")
+            if "error" in result:
+                messagebox.showerror("ZZMMI", f"Saved, but couldn't reload mods in the game:\n\n{result['error']}",
+                                     parent=self)
+
+        self.saving = True
+        self.save_button.configure(state=tk.DISABLED, text="Saving…")
+        worker = threading.Thread(target=reload, daemon=True)
+        worker.start()
+        self.after(POLL_MS, poll)
+
+    def _message(self, text: str) -> None:
+        tk.Label(
+            self.rows, text=text, bg=self.colors.bg, fg=self.colors.text, wraplength=440, justify=tk.LEFT,
+        ).pack(side=tk.TOP, anchor=tk.W, padx=8, pady=8)
+
+    def _add_row(self, mod: Mod, checked: bool) -> None:
+        var = tk.BooleanVar(self, value=checked)
+        self.checks[mod.path] = var
+        # Checkbutton draws its box to the left of its text, and clicking the name toggles it too.
+        tk.Checkbutton(
+            self.rows, text=mod.name, variable=var, anchor=tk.W, bg=self.colors.bg, fg=self.colors.text,
+            highlightthickness=0,
+        ).pack(side=tk.TOP, fill=tk.X, padx=4, pady=2)
+
+    def _on_wheel(self, event: tk.Event) -> None:
+        if self.rows.winfo_height() <= self.canvas.winfo_height():
+            return  # everything fits; don't let the list drift
+        # Aqua Tk 8.6 reports small per-notch deltas; other platforms and Tk 9 use multiples of 120.
+        step = event.delta if abs(event.delta) < 120 else event.delta // 120
+        self.canvas.yview_scroll(-step, "units")
+
+
 class Popup(tk.Toplevel):
     """A small dialog: a tile image on the left, a message to its right, buttons along the bottom.
 
@@ -485,7 +627,7 @@ class App:
         self.closing = False
 
         root.title("ZZMMI")
-        root.geometry("620x580")
+        root.geometry(DEFAULT_SIZE)
         root.minsize(TILE_PX + 4 * TILE_PAD, TILE_PX + 6 * TILE_PAD)
         root.configure(bg=self.colors.bg)
         self._set_icon()
@@ -496,7 +638,14 @@ class App:
             grid.add("Launch with mods", "launch_game.png", self.launch),
             grid.add("Launch without mods", "launch_without_mods.png", self.launch_without_mods),
         ]
+        grid.add("Edit modlist", "edit_modlist.png", self.edit_modlist)
         grid.add("Open mods folder", "open_mods_folder.png", self.open_mods)
+        self.require_game_running = [
+            grid.add("Toggle mods", "toggle_mods.png", self.toggle_mods),
+            grid.add("Reload mods", "reload_mods.png", self.reload_mods)
+        ]
+        for tile in self.require_game_running:  # until a game is launched
+            tile.set_enabled(False)
         grid.add("View current log", "full_log.png", self.show_log)
         grid.add("Open logs folder", "open_logs.png", self.show_logs)
         self.updates_tile = grid.add("Check for updates", "check_for_updates.png", self.check_for_updates)
@@ -545,16 +694,22 @@ class App:
     def _start_game(self, tile: Tile, *extra: str) -> None:
         if self.game.running:
             return
-        self.show_log()
+
         self.log.write(" ".join(["$ zzmmi debug-launch", *extra]) + "\n")
+
         try:
             self.game.start(launch_command(*extra))
         except OSError as e:
             self.log.write(f"Failed to start: {e}\n")
             return
+
         tile.set_label("Running…")
+
         for launch_tile in self.launch_tiles:  # one game at a time
             launch_tile.set_enabled(False)
+        for game_tile in self.require_game_running:
+            game_tile.set_enabled(True)
+
         self._close_loading()
         self.loading = LoadingWindow(self.root)
 
@@ -562,6 +717,15 @@ class App:
         if self.loading is not None:
             self.loading.close()
             self.loading = None
+
+    def edit_modlist(self) -> None:
+        self.open_window("modlist", lambda: ModlistWindow(self.root, self.colors))
+
+    def toggle_mods(self) -> None:
+        toggle_all_mods()
+
+    def reload_mods(self) -> None:
+        xxmi_reload_mods()
 
     def open_mods(self) -> None:
         try:
@@ -640,6 +804,8 @@ class App:
         for tile in self.launch_tiles:
             tile.set_label()
             tile.set_enabled(True)
+        for tile in self.require_game_running:
+            tile.set_enabled(False)
 
     def on_close(self) -> None:
         if not self.game.running:
