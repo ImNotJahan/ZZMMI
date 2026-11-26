@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import webbrowser
+from collections import Counter
 from pathlib import Path
 from typing import Callable
 
@@ -28,6 +29,7 @@ except ImportError as e:  # Homebrew's Python ships Tk separately
     ) from None
 
 from . import updates
+from .characters import character_tags
 from .game_window import game_window_visible
 from .runtime.xxmi_legacy import XxmiInPrefix
 from .runtime.yaagl import YaaglError, YaaglRuntime
@@ -58,6 +60,10 @@ FROZEN = getattr(sys, "frozen", False)
 RUNS_DIR = (Path.home() / "Library" / "Application Support" / "ZZMMI" / "runs") if FROZEN else Path.cwd() / "runs"
 POLL_MS = 100
 TK9 = tk.TkVersion >= 9  # Tk 9 changed how scroll events arrive (see ModlistWindow._on_wheel)
+# Modlist character menu: everything, or (after the characters) mods for no particular character.
+ALL_CHARACTERS_LABEL = "All characters"
+NO_CHARACTER = ""
+NO_CHARACTER_LABEL = "Other"
 
 
 def launch_command(*extra: str) -> list[str]:
@@ -354,7 +360,8 @@ class ModlistWindow(tk.Toplevel):
 
     Ticking a box only records the choice. "Save list" applies the choices, moving mods between
     the Mods and ModsNotUsing folders, then reloads mods in the game if it's running. The list
-    re-reads the folders whenever the window gets focus, keeping any unsaved choices.
+    re-reads the folders whenever the window gets focus, keeping any unsaved choices. A search
+    box and a character menu above the list filter it.
     """
 
     def __init__(self, master: tk.Misc, colors: Colors) -> None:
@@ -364,15 +371,24 @@ class ModlistWindow(tk.Toplevel):
         self.geometry("500x800")
         self.minsize(300, 200)
 
-        # Typing in the search box filters the rows as you go; Escape clears it.
-        search_bar = tk.Frame(self, bg=colors.bg)
-        search_bar.pack(side=tk.TOP, fill=tk.X, padx=8, pady=(8, 0))
-        tk.Label(search_bar, text="Search", bg=colors.bg, fg=colors.text).pack(side=tk.LEFT)
+        # Filters: typing in the search box filters the rows as you go (Escape clears it), and
+        # the character menu lists the characters the mods appear to be for (see characters.py).
+        filters = tk.Frame(self, bg=colors.bg)
+        filters.pack(side=tk.TOP, fill=tk.X, padx=8, pady=(8, 0))
+        filters.columnconfigure(1, weight=1)
+        tk.Label(filters, text="Search", bg=colors.bg, fg=colors.text).grid(row=0, column=0, sticky=tk.W)
         self.query = tk.StringVar(self)
-        self.query.trace_add("write", lambda *_: self._on_query())
-        self.search = tk.Entry(search_bar, textvariable=self.query, highlightbackground=colors.bg)
-        self.search.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 0))
+        self.query.trace_add("write", lambda *_: self._on_filters_changed())
+        self.search = tk.Entry(filters, textvariable=self.query, highlightbackground=colors.bg)
+        self.search.grid(row=0, column=1, sticky=tk.EW, padx=(6, 0))
         self.search.bind("<Escape>", lambda _e: self.query.set(""))
+        tk.Label(filters, text="Character", bg=colors.bg, fg=colors.text).grid(
+            row=1, column=0, sticky=tk.W, pady=(6, 0))
+        self.character: str | None = None  # None: all mods; NO_CHARACTER: untagged mods only
+        self.character_label = tk.StringVar(self, value=ALL_CHARACTERS_LABEL)
+        self.character_menu = tk.OptionMenu(filters, self.character_label, ALL_CHARACTERS_LABEL)
+        self.character_menu.configure(highlightbackground=colors.bg)
+        self.character_menu.grid(row=1, column=1, sticky=tk.W, padx=(6, 0), pady=(6, 0))
 
         bar = tk.Frame(self, bg=colors.bg)
         bar.pack(side=tk.TOP, fill=tk.X, padx=8, pady=(8, 0))
@@ -402,7 +418,11 @@ class ModlistWindow(tk.Toplevel):
         self.mods: list[Mod] = []  # on-disk state the rows were built from
         self.checks: dict[Path, tk.BooleanVar] = {}  # by Mod.path
         self.row_widgets: dict[Path, tk.Checkbutton] = {}  # by Mod.path
-        self.no_matches: tk.Label | None = None  # shown when the search hides every row
+        self.tags: dict[Path, tuple[str, ...]] = {}  # characters each mod is for, by Mod.path
+        # Tagging reads every .ini in a mod, so results are kept for as long as the window is
+        # open, by (name, folder mtime). The name survives moving between Mods and ModsNotUsing.
+        self.tag_cache: dict[tuple[str, int], tuple[str, ...]] = {}
+        self.no_matches: tk.Label | None = None  # shown when the filters hide every row
         self.saving = False
         self.refresh(force=True)
         self.search.focus_set()
@@ -436,7 +456,42 @@ class ModlistWindow(tk.Toplevel):
             self._message(f"No mods installed yet.\n\nPut them in {self.library.enabled_dir}")
         for mod in mods:
             self._add_row(mod, pending.get(mod.name, mod.enabled))
+        self.tags = {mod.path: self._tags_for(mod) for mod in mods}
+        self._update_character_menu()
         self._filter()
+
+    def _tags_for(self, mod: Mod) -> tuple[str, ...]:
+        try:
+            key = (mod.name, mod.path.stat().st_mtime_ns)
+        except OSError:
+            return ()
+        if key not in self.tag_cache:
+            self.tag_cache[key] = character_tags(mod.path)
+        return self.tag_cache[key]
+
+    def _update_character_menu(self) -> None:
+        """List the characters the mods are for, with how many mods each, in the character menu."""
+        counts = Counter(tag for tags in self.tags.values() for tag in tags)
+        untagged = sum(1 for tags in self.tags.values() if not tags)
+        options: list[tuple[str | None, str]] = [(None, ALL_CHARACTERS_LABEL)]
+        options += [(name, f"{name} ({counts[name]})") for name in sorted(counts, key=str.casefold)]
+        if counts and untagged:
+            options.append((NO_CHARACTER, f"{NO_CHARACTER_LABEL} ({untagged})"))
+        if self.character not in {character for character, _ in options}:
+            self.character = None  # the last mod for that character is gone
+        menu = self.character_menu["menu"]
+        menu.delete(0, tk.END)
+        for i, (character, label) in enumerate(options):
+            if i == 1 or character == NO_CHARACTER:
+                menu.add_separator()
+            menu.add_radiobutton(label=label, variable=self.character_label, value=label,
+                                 command=lambda c=character: self._choose_character(c))
+            if character == self.character:
+                self.character_label.set(label)  # counts may have changed
+
+    def _choose_character(self, character: str | None) -> None:
+        self.character = character
+        self._on_filters_changed()
 
     def pending(self) -> dict[str, bool]:
         """Choices that differ from what's on disk, as {mod name: enabled}."""
@@ -500,8 +555,23 @@ class ModlistWindow(tk.Toplevel):
             highlightthickness=0,
         )
 
+    def _shows(self, mod: Mod, words: list[str]) -> bool:
+        """Whether `mod` passes the character menu and the search box.
+
+        Every searched word must appear (ignoring case) in the mod's name or its character tags,
+        so searching "jane" also finds a Jane Doe skin named "John Doe".
+        """
+        tags = self.tags.get(mod.path, ())
+        if self.character == NO_CHARACTER:
+            if tags:
+                return False
+        elif self.character is not None and self.character not in tags:
+            return False
+        text = " ".join((mod.name, *tags)).casefold()
+        return all(word in text for word in words)
+
     def _filter(self) -> None:
-        """Show only the rows whose mod name contains every word in the search box (ignoring case).
+        """Show only the rows that pass the filters (see _shows).
 
         Hidden rows keep their checkbox state, so unsaved choices for them are still saved.
         """
@@ -516,13 +586,15 @@ class ModlistWindow(tk.Toplevel):
             if row is None:
                 continue
             row.pack_forget()
-            if all(word in mod.name.casefold() for word in words):
+            if self._shows(mod, words):
                 row.pack(side=tk.TOP, fill=tk.X, padx=4, pady=2)
                 shown += 1
         if self.row_widgets and not shown:
-            self.no_matches = self._message(f"No mods match “{self.query.get().strip()}”.")
+            # Only the search can empty the list: the menu only offers characters that have mods.
+            which = {None: "", NO_CHARACTER: "other "}.get(self.character, f"{self.character} ")
+            self.no_matches = self._message(f"No {which}mods match “{self.query.get().strip()}”.")
 
-    def _on_query(self) -> None:
+    def _on_filters_changed(self) -> None:
         self._filter()
         self.canvas.yview_moveto(0)  # the old scroll position means nothing for the new results
 
