@@ -363,6 +363,16 @@ class ModlistWindow(tk.Toplevel):
         self.geometry("500x800")
         self.minsize(300, 200)
 
+        # Typing in the search box filters the rows as you go; Escape clears it.
+        search_bar = tk.Frame(self, bg=colors.bg)
+        search_bar.pack(side=tk.TOP, fill=tk.X, padx=8, pady=(8, 0))
+        tk.Label(search_bar, text="Search", bg=colors.bg, fg=colors.text).pack(side=tk.LEFT)
+        self.query = tk.StringVar(self)
+        self.query.trace_add("write", lambda *_: self._on_query())
+        self.search = tk.Entry(search_bar, textvariable=self.query, highlightbackground=colors.bg)
+        self.search.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 0))
+        self.search.bind("<Escape>", lambda _e: self.query.set(""))
+
         bar = tk.Frame(self, bg=colors.bg)
         bar.pack(side=tk.TOP, fill=tk.X, padx=8, pady=(8, 0))
         self.save_button = tk.Button(bar, text="Save list", highlightbackground=colors.bg, command=self.save)
@@ -388,8 +398,11 @@ class ModlistWindow(tk.Toplevel):
         self.error: str | None = None  # why the library couldn't be read, if it couldn't
         self.mods: list[Mod] = []  # on-disk state the rows were built from
         self.checks: dict[Path, tk.BooleanVar] = {}  # by Mod.path
+        self.row_widgets: dict[Path, tk.Checkbutton] = {}  # by Mod.path
+        self.no_matches: tk.Label | None = None  # shown when the search hides every row
         self.saving = False
         self.refresh(force=True)
+        self.search.focus_set()
 
     def refresh(self, force: bool = False, keep_pending: bool = True) -> None:
         """Re-read the mod folders and rebuild the rows if anything changed.
@@ -409,6 +422,8 @@ class ModlistWindow(tk.Toplevel):
         pending = self.pending() if keep_pending else {}
         self.mods, self.error = mods, error
         self.checks = {}
+        self.row_widgets = {}
+        self.no_matches = None
         for child in self.rows.winfo_children():
             child.destroy()
         if error is not None:
@@ -418,6 +433,7 @@ class ModlistWindow(tk.Toplevel):
             self._message(f"No mods installed yet.\n\nPut them in {self.library.enabled_dir}")
         for mod in mods:
             self._add_row(mod, pending.get(mod.name, mod.enabled))
+        self._filter()
 
     def pending(self) -> dict[str, bool]:
         """Choices that differ from what's on disk, as {mod name: enabled}."""
@@ -464,19 +480,48 @@ class ModlistWindow(tk.Toplevel):
         worker.start()
         self.after(POLL_MS, poll)
 
-    def _message(self, text: str) -> None:
-        tk.Label(
+    def _message(self, text: str) -> tk.Label:
+        label = tk.Label(
             self.rows, text=text, bg=self.colors.bg, fg=self.colors.text, wraplength=440, justify=tk.LEFT,
-        ).pack(side=tk.TOP, anchor=tk.W, padx=8, pady=8)
+        )
+        label.pack(side=tk.TOP, anchor=tk.W, padx=8, pady=8)
+        return label
 
     def _add_row(self, mod: Mod, checked: bool) -> None:
+        """Make a mod's row; _filter() decides whether it's shown."""
         var = tk.BooleanVar(self, value=checked)
         self.checks[mod.path] = var
         # Checkbutton draws its box to the left of its text, and clicking the name toggles it too.
-        tk.Checkbutton(
+        self.row_widgets[mod.path] = tk.Checkbutton(
             self.rows, text=mod.name, variable=var, anchor=tk.W, bg=self.colors.bg, fg=self.colors.text,
             highlightthickness=0,
-        ).pack(side=tk.TOP, fill=tk.X, padx=4, pady=2)
+        )
+
+    def _filter(self) -> None:
+        """Show only the rows whose mod name contains every word in the search box (ignoring case).
+
+        Hidden rows keep their checkbox state, so unsaved choices for them are still saved.
+        """
+        words = self.query.get().casefold().split()
+        if self.no_matches is not None:
+            self.no_matches.destroy()
+            self.no_matches = None
+        shown = 0
+        # Forgetting and re-packing each row in turn keeps the shown rows in list order.
+        for mod in self.mods:
+            row = self.row_widgets.get(mod.path)
+            if row is None:
+                continue
+            row.pack_forget()
+            if all(word in mod.name.casefold() for word in words):
+                row.pack(side=tk.TOP, fill=tk.X, padx=4, pady=2)
+                shown += 1
+        if self.row_widgets and not shown:
+            self.no_matches = self._message(f"No mods match “{self.query.get().strip()}”.")
+
+    def _on_query(self) -> None:
+        self._filter()
+        self.canvas.yview_moveto(0)  # the old scroll position means nothing for the new results
 
     def _on_wheel(self, event: tk.Event) -> None:
         if self.rows.winfo_height() <= self.canvas.winfo_height():
